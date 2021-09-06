@@ -161,12 +161,17 @@ func NewOAuthProxy(opts *options.Options, validator func(string) bool) (*OAuthPr
 			return nil, fmt.Errorf("could not load htpasswdfile: %v", err)
 		}
 	}
+
 	if opts.LdapConfFile != "" {
 		logger.Printf("using ldap server config file %s", opts.LdapConfFile)
 		basicAuthValidator, err = basic.NewLdapAuthenticatorFromFile(opts.LdapConfFile)
 		if err != nil {
 			logger.Fatalf("FATAL: unable to open %s %s", opts.LdapConfFile, err)
 		}
+	} else {
+
+		logger.Printf("No ldap configured")
+
 	}
 
 	allowedRoutes, err := buildRoutesAllowlist(opts)

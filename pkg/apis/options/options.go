@@ -207,6 +207,8 @@ func NewFlagSet() *pflag.FlagSet {
 	flagSet.String("client-secret-file", "", "the file with OAuth Client Secret")
 	flagSet.String("authenticated-emails-file", "", "authenticate against emails via file (one per line)")
 	flagSet.String("htpasswd-file", "", "additionally authenticate against a htpasswd file. Entries must be created with \"htpasswd -B\" for bcrypt encryption")
+	flagSet.String("ldap-bind-user", "", "additionally authenticate against a LDAP server configured by an environement variable.")
+	flagSet.String("ldap-bind-password", "svc-password-notset", "additionally authenticate against a LDAP server configured by an environement variable.")
 	flagSet.String("ldap-conf-file", "", "additionally authenticate against a LDAP server configured by a TOML file.")
 	flagSet.Bool("display-custom-login-form", true, "display username / password login form if an htpasswd file or a ldap config file is provided")
 	flagSet.String("custom-templates-dir", "", "path to custom html templates")
