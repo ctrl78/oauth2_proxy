@@ -4,24 +4,17 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log"
-	"strings"
 
 	"github.com/BurntSushi/toml"
 	"github.com/go-ldap/ldap/v3"
 )
 
 type ldapServerConf struct {
-	Host                       string           `toml:"host"`
-	Port                       int              `toml:"port"`
-	Realm                      string           `toml:"realm"`
-	Attr                       ldapAttributeMap `toml:"attributes"`
-	SearchFilter               string           `toml:"search_filter"`
-	ResolvedGroupsSearchFilter string           `toml:"resolved_groups_search_filter"`
-	SearchBaseDnList           []string         `toml:"search_base_dns"`
-	GroupDnList                []string         `toml:"group_dns"`
-}
-type ldapAttributeMap struct {
-	MemberOf string `toml:"member_of"`
+	Host         string   `toml:"host"`
+	Port         int      `toml:"port"`
+	Realm        string   `toml:"realm"`
+	SearchBaseDn string   `toml:"search_base"`
+	Groups       []string `toml:"groups"`
 }
 
 // LdapAuthenticator represents the structure of an ldap authenticator
@@ -64,81 +57,42 @@ func (a *LdapAuthenticator) Validate(user string, password string) bool {
 		log.Printf("LDAP: Unable to bind as user '%s':'%s'", user, err)
 		return false
 	}
-
-	// Search for the given username in ldap
-	var searchResult *ldap.SearchResult
-	for _, searchBase := range a.Conf.SearchBaseDnList {
-		searchReq := ldap.SearchRequest{
-			BaseDN:       searchBase,
-			Scope:        ldap.ScopeWholeSubtree,
-			DerefAliases: ldap.NeverDerefAliases,
-			Attributes: []string{
-				a.Conf.Attr.MemberOf,
-			},
-			Filter: strings.Replace(a.Conf.SearchFilter, "%s", ldap.EscapeFilter(user), -1),
-		}
-
-		searchResult, err = l.Search(&searchReq)
-		if err != nil {
-			log.Printf("LDAP: Unable to search for user '%s': %s", user, err)
-		}
-
-		if len(searchResult.Entries) > 0 {
-			break
-		}
-	}
-
-	if len(searchResult.Entries) != 1 {
-		log.Printf("LDAP: User does not exist or too many entries returned")
+	// check if groups Acls are in place
+	if len(a.Conf.Groups) == 0 {
+		log.Printf("LDAP: Cannot continue there is no groups configured to control access")
 		return false
 	}
+	for _, group := range a.Conf.Groups {
+		// Get the DN of the group
+		filter := fmt.Sprintf("(CN=%s)", ldap.EscapeFilter(group))
+		searchReq := ldap.NewSearchRequest(a.Conf.SearchBaseDn, ldap.ScopeWholeSubtree, 0, 0, 0, false, filter, []string{"sAMAccountName"}, nil)
 
-	userdn := searchResult.Entries[0].DN
-
-	// Case no allowed group is configured
-	if a.Conf.GroupDnList == nil {
-		return true
-	}
-
-	// Case any allowed group is part of member_of attribute
-	for _, allowedGroupDN := range a.Conf.GroupDnList {
-		for _, groupDN := range searchResult.Entries[0].GetAttributeValues("memberOf") {
-			if groupDN == allowedGroupDN {
-				return true
-			}
-		}
-	}
-
-	// Case any allowed group is not part of member_of attribute
-	// Search for the resolved groups.
-	var resolvedGroupsSearchResult *ldap.SearchResult
-	for _, searchBase := range a.Conf.SearchBaseDnList {
-		resolvedGroupSearchReq := ldap.SearchRequest{
-			BaseDN:       searchBase,
-			Scope:        ldap.ScopeWholeSubtree,
-			DerefAliases: ldap.NeverDerefAliases,
-			Filter:       strings.Replace(a.Conf.ResolvedGroupsSearchFilter, "%s", ldap.EscapeFilter(userdn), -1),
-		}
-
-		resolvedGroupsSearchResult, err = l.Search(&resolvedGroupSearchReq)
+		resultDn, err := l.Search(searchReq)
 		if err != nil {
-			log.Printf("LDAP: Unable to search for resolved groups for user '%s': %s", user, err)
+			log.Printf("LDAP: Unable to find group '%s'", group)
+			return false
 		}
 
-		if len(resolvedGroupsSearchResult.Entries) > 0 {
-			break
-		}
-	}
+		// Get the members of a given group using DN
+		groupDN := resultDn.Entries[0].DN
+		filterMembers := fmt.Sprintf("(&(objectClass=user)(memberOf:1.2.840.113556.1.4.1941:=%s))", ldap.EscapeFilter(groupDN))
+		searchReqMembers := ldap.NewSearchRequest(a.Conf.SearchBaseDn, ldap.ScopeWholeSubtree, 0, 0, 0, false, filterMembers, []string{"sAMAccountName"}, nil)
+		resultMembers, err := l.Search(searchReqMembers)
 
-	for _, allowedGroupDN := range a.Conf.GroupDnList {
-		for _, group := range resolvedGroupsSearchResult.Entries {
-			if group.DN == allowedGroupDN {
+		if err != nil {
+			log.Printf("LDAP: Unable to get members of group '%s'", group)
+			return false
+		}
+
+		for _, accountName := range resultMembers.Entries {
+			if accountName.GetAttributeValue("sAMAccountName") == user {
+				log.Printf("Account is member of %s", groupDN)
 				return true
 			}
+
 		}
 	}
-
-	// Case none of allowed group is part of resolved groups.
 	log.Printf("Invalid LDAP group membership for %s.", user)
 	return false
+
 }
